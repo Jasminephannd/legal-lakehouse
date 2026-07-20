@@ -263,6 +263,25 @@ data "aws_iam_policy_document" "deploy_permissions" {
       "glue:GetTags",
       "glue:TagResource",
       "glue:UntagResource",
+
+      # --- required by dbt-athena, not by Terraform ---
+      # dbt manages tables and views THROUGH the Glue catalog, so it needs
+      # a wider set than Terraform does. Table VERSION actions in
+      # particular are non-obvious: replacing a view makes dbt call
+      # GetTableVersions to find prior versions to clean up, and that call
+      # is evaluated against the CATALOG arn
+      # (arn:aws:glue:<region>:<account>:catalog), not the table's.
+      "glue:GetTableVersion",
+      "glue:GetTableVersions",
+      "glue:DeleteTableVersion",
+      "glue:BatchDeleteTableVersion",
+      "glue:BatchDeleteTable",
+      "glue:BatchDeletePartition",
+      "glue:CreatePartition",
+      "glue:UpdatePartition",
+      "glue:DeletePartition",
+      "glue:BatchUpdatePartition",
+      "glue:GetCatalogImportStatus",
     ]
     resources = ["*"] # Glue Data Catalog actions don't support resource-level ARNs here
   }

@@ -256,6 +256,29 @@ GitHub appends **immutable numeric IDs** to both the owner and the repository na
 
 A wildcard trust policy (`repo:owner/repo:*`) was written as a diagnostic and reverted **without ever being applied** — loosening it would have masked the real cause and shipped the exact misconfiguration this project is meant to demonstrate avoiding.
 
+**A deploy role cannot grant itself permissions through the pipeline it runs.** Terraform *refreshes* before it *plans*, and refresh uses the permissions the role holds **right now**. So when the thing being applied is the role's own policy, the run dies during refresh and the apply that would have granted the missing permissions never executes. Every retry fails identically, and pushing more fixes changes nothing — the code is correct, it just never reaches AWS.
+
+Breaking the loop requires applying from **outside** the pipeline, with a higher-privilege identity:
+
+```bash
+cd infra/main
+aws sts get-caller-identity      # confirm this is a human/admin, not the deploy role
+terraform apply
+```
+
+This is the same bootstrap pattern as `infra/bootstrap` (which creates the state bucket that `infra/main`'s backend depends on) — a dependency that cannot be satisfied by the thing depending on it. In production the standard fix is to split the deploy role's *permissions* into a separate stack owned by a higher-privilege bootstrap role, so the CI role never manages its own grants.
+
+**Terraform's refresh phase needs read permissions you never think to grant.** Related to the above, and the reason the policy is far longer than it looks like it should be. A least-privilege policy written from intent — "it creates a bucket, so it needs `CreateBucket`" — fails on refresh, because Terraform first reads the complete current state of every managed resource: tags, bucket policies, lifecycle rules, encryption settings, log-group descriptions, Lambda versions. `s3:GetBucketPolicy` is required even though this project never sets a bucket policy; Terraform reads it to confirm it's absent. Two non-obvious cases:
+
+- **`logs:DescribeLogGroups` cannot be resource-scoped.** AWS evaluates it against `log-group::log-stream:` (note the empty segment), so a prefix-scoped ARN never matches and the error names a resource you didn't write.
+- **`s3:DeleteObject` on the state bucket is not optional.** With `use_lockfile`, the lock *is* an S3 object. Without delete, every run leaves state locked and the next one fails — a slow-motion self-DoS.
+
+**dbt-athena needs Glue permissions Terraform doesn't.** dbt manages tables and views *through* the Glue catalog, so it needs a wider set than the provider does. Table-version actions are the surprise: replacing a view makes dbt call `GetTableVersions` to find prior versions to clean up, and that call is authorised against the **catalog** ARN, not the table's.
+
+**Athena rejects timezone-aware timestamps in Hive tables.** `from_iso8601_timestamp()` returns `timestamp(3) with time zone`, which Hive-format tables can't store: `Unsupported Hive type: timestamp(3) with time zone`. Wrap it — `cast(from_iso8601_timestamp(x) as timestamp)`. Safe here because the parser writes UTC exclusively, so there's no zone information to lose.
+
+**Immutable tags make CD re-runs fail.** Images are tagged with the commit SHA and the ECR repo is `IMMUTABLE`, so re-running a workflow for the same commit tries to push an existing tag and fails. Since re-running is exactly what you do when a *later* step failed, `cd.yml` guards the build with an existence check. That's not a workaround: same commit means same image, so the tag existing is sufficient proof the correct image is present.
+
 **Buildx + Lambda: `--provenance=false --sbom=false` is mandatory.** Buildx's default `--push` attaches provenance/SBOM attestations, which wrap the image in an OCI *image index*. Lambda only accepts a plain single-architecture manifest and fails with `InvalidParameterValueException: The image manifest, config or layer media type ... is not supported`. Worse, the push may report success — `aws ecr describe-images` showed the tag `ACTIVE` — while producing an artifact Lambda can't consume. Check `imageManifestMediaType` is `image.manifest`, not `image.index`.
 
 **Terraform still requires an OIDC thumbprint.** AWS has verified GitHub's OIDC endpoint against its trusted root CAs since July 2023, so the thumbprint is ignored in practice — but `aws_iam_openid_connect_provider` still validates that `thumbprint_list` contains an exactly-40-character string.
