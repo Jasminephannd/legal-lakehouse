@@ -43,6 +43,22 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
       days = 30
     }
   }
+
+  # Athena query result files (Block 6's reconciliation query, and every
+  # later Day 2 dbt-on-Athena query) are throwaway output, not data —
+  # matches the plan's Day 2 Block 1 note on this same prefix.
+  rule {
+    id     = "expire-athena-results"
+    status = "Enabled"
+
+    filter {
+      prefix = "athena-results/"
+    }
+
+    expiration {
+      days = 7
+    }
+  }
 }
 
 # Zero-byte marker objects purely so the prefixes are visible in the
@@ -50,7 +66,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
 # require these — a prefix exists implicitly the moment an object is
 # written under it — so this block is convenience, not necessity.
 resource "aws_s3_object" "prefix_markers" {
-  for_each = toset(["bronze/", "silver/", "gold/", "rejected/"])
+  for_each = toset(["bronze/", "silver/", "gold/", "rejected/", "athena-results/"])
 
   bucket       = aws_s3_bucket.data.id
   key          = each.value

@@ -15,3 +15,8 @@ variable "data_bucket_name" {
   type        = string
   default     = "legal-lakehouse-data-jasminephannd"
 }
+
+variable "parser_image_tag" {
+  description = "Git SHA tag of the parser image already built and pushed to ECR (see src/parser/Dockerfile). No default on purpose: this must reference an image that actually exists in the legal-lakehouse-parser repo before you can apply — build and push first, then pass this in with -var or TF_VAR_parser_image_tag."
+  type        = string
+}

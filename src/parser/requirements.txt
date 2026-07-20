@@ -1,0 +1,9 @@
+# Lambda image dependencies only — deliberately NOT the repo-root
+# requirements.txt (which also pulls in datasets/huggingface_hub for the
+# ingest step; irrelevant weight in a Lambda image).
+#
+# boto3 is intentionally excluded: AWS's Lambda Python base image already
+# bundles it. Add it here explicitly only if a newer boto3 feature is
+# needed than what the base image ships.
+pydantic>=2.6
+pyarrow>=16.0
