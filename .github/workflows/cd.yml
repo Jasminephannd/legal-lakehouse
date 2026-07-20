@@ -38,6 +38,14 @@ jobs:
             exit 1
           fi
           echo "Secret is present. Any failure in the next step is the OIDC trust policy, not a missing secret."
+          echo ""
+          echo "--- OIDC claim GitHub will send ---"
+          echo "github.repository : ${{ github.repository }}"
+          echo "github.ref        : ${{ github.ref }}"
+          echo "expected sub      : repo:${{ github.repository }}:ref:${{ github.ref }}"
+          echo ""
+          echo "This must match the sub condition in infra/main/oidc.tf EXACTLY."
+          echo "IAM string conditions are case-sensitive."
 
       - name: Configure AWS credentials via OIDC
         # No long-lived secrets — this assumes a role scoped in
