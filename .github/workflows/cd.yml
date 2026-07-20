@@ -20,6 +20,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # configure-aws-credentials reports an empty role-to-assume and a
+      # rejected OIDC trust policy with the identical, unhelpful message:
+      # "Could not load credentials from any providers". This step
+      # distinguishes them before we get there. It prints the secret's
+      # LENGTH, never its value — an ARN isn't sensitive, but treating
+      # every secret as opaque is the habit worth keeping.
+      - name: Preflight — is the deploy role secret actually set?
+        run: |
+          LEN=$(printf %s "${{ secrets.AWS_DEPLOY_ROLE_ARN }}" | wc -c)
+          echo "AWS_DEPLOY_ROLE_ARN length: $LEN"
+          if [ "$LEN" -eq 0 ]; then
+            echo "::error::AWS_DEPLOY_ROLE_ARN is empty or unset."
+            echo "Check: Settings > Secrets and variables > Actions > *Repository secrets*"
+            echo "(NOT Environment secrets — this job declares no environment, so those never resolve)."
+            echo "Name must match exactly, no trailing spaces: AWS_DEPLOY_ROLE_ARN"
+            exit 1
+          fi
+          echo "Secret is present. Any failure in the next step is the OIDC trust policy, not a missing secret."
+
       - name: Configure AWS credentials via OIDC
         # No long-lived secrets — this assumes a role scoped in
         # infra/main/oidc.tf to this repo's main branch only.
