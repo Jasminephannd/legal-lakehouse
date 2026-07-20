@@ -46,7 +46,14 @@ renamed as (
         -- Cheap proxy measure; whitespace-split word count.
         cardinality(split(text, ' '))                   as word_count,
 
-        from_iso8601_timestamp(ingested_at)             as ingested_at
+        -- from_iso8601_timestamp() returns `timestamp(3) with time zone`,
+        -- which Hive-format tables cannot store:
+        --   Unsupported Hive type: timestamp(3) with time zone
+        -- The outer cast drops the zone. Safe here because the parser
+        -- always writes ingested_at in UTC (datetime.now(timezone.utc)
+        -- in src/parser/parser.py), so there is no zone information to
+        -- lose — every value is already normalised to the same offset.
+        cast(from_iso8601_timestamp(ingested_at) as timestamp) as ingested_at
 
     from source
 

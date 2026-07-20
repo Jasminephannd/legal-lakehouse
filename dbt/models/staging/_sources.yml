@@ -12,7 +12,10 @@ sources:
     tables:
       - name: silver_judgments
         description: One row per legal document that passed Pydantic validation.
-        loaded_at_field: "from_iso8601_timestamp(ingested_at)"
+        # Cast for the same reason as stg_judgments.ingested_at:
+        # from_iso8601_timestamp() yields a timezone-aware timestamp that
+        # Hive-format tables reject. Values are already UTC.
+        loaded_at_field: "cast(from_iso8601_timestamp(ingested_at) as timestamp)"
         freshness:
           # Used on Day 3 via `dbt source freshness`. Generous bounds
           # because this is a batch pipeline run on demand, not a
