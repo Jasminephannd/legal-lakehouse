@@ -1,0 +1,21 @@
+.terraform/
+*.tfstate*
+.env
+data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# dbt (day 2)
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+
+# misc
+.DS_Store
