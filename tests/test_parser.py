@@ -1,7 +1,7 @@
 import hashlib
 
-from src.parser.parser import RejectedRecord, parse_record
 from src.parser.models import ParsedDoc
+from src.parser.parser import RejectedRecord, parse_record
 
 
 def _raw(**overrides) -> dict:
@@ -42,6 +42,30 @@ def test_missing_date_defaults_to_unknown_year_not_rejected():
     assert isinstance(result, ParsedDoc)
     assert result.decision_date is None
     assert result.year == "unknown"
+
+
+def test_corpus_actual_datetime_format_parses():
+    # REGRESSION: the dataset card documents `date` as "YYYY-MM-DD", but
+    # the real values are "YYYY-MM-DD HH:MM:SS" (19 chars). The original
+    # parser only accepted "%Y-%m-%d" and silently sent every dated
+    # record to year='unknown'.
+    result = parse_record(_raw(date="2013-11-13 00:00:00"))
+    assert isinstance(result, ParsedDoc)
+    assert result.year == "2013"
+    assert result.decision_date is not None
+    assert result.decision_date.isoformat() == "2013-11-13"
+
+
+def test_iso_t_separator_date_parses():
+    result = parse_record(_raw(date="2019-06-21T00:00:00"))
+    assert isinstance(result, ParsedDoc)
+    assert result.year == "2019"
+
+
+def test_plain_date_format_still_parses():
+    result = parse_record(_raw(date="2008-10-08"))
+    assert isinstance(result, ParsedDoc)
+    assert result.year == "2008"
 
 
 def test_malformed_date_defaults_to_unknown_year_not_a_crash():

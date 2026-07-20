@@ -1,0 +1,160 @@
+version: 2
+
+models:
+  - name: dim_jurisdiction
+    description: >
+      Australian jurisdictions present in the corpus.
+      GRAIN: one row per jurisdiction_code.
+    columns:
+      - name: jurisdiction_key
+        description: Surrogate key (hashed jurisdiction_code). Referenced by fct_judgment.
+        tests:
+          - not_null
+          - unique
+      - name: jurisdiction_code
+        description: Natural key — lowercase snake_case code from the source corpus.
+        tests:
+          - not_null
+          - unique
+      - name: jurisdiction_name
+        description: Human-readable jurisdiction name.
+      - name: jurisdiction_level
+        description: federal, state, or territory. Drives court hierarchy interpretation.
+        tests:
+          - accepted_values:
+              values: [federal, state, territory]
+      - name: country
+        description: Always 'Australia' for this corpus. Present so the model extends cleanly.
+
+  - name: dim_court
+    description: >
+      Courts and tribunals appearing on decisions, plus one explicit
+      'Not applicable' member for legislation and bills.
+      GRAIN: one row per court_name.
+    columns:
+      - name: court_key
+        description: Surrogate key (hashed court_name). Referenced by fct_judgment.
+        tests:
+          - not_null
+          - unique
+      - name: court_name
+        description: Resolved court name, derived from the citation's neutral abbreviation.
+        tests:
+          - not_null
+          - unique
+      - name: jurisdiction_key
+        description: FK to dim_jurisdiction. Null only on the 'Not applicable' member.
+      - name: court_level
+        description: appellate, first_instance, tribunal, or not_applicable — inferred from name patterns.
+        tests:
+          - accepted_values:
+              values: [appellate, first_instance, tribunal, not_applicable]
+      - name: is_court
+        description: False for tribunals and the not-applicable member.
+
+  - name: dim_date
+    description: >
+      Calendar date spine covering 1900-2030, plus an explicit unknown
+      member for documents with no parseable date.
+      GRAIN: one row per calendar day.
+    columns:
+      - name: date_key
+        description: Surrogate key (hashed date). Referenced by fct_judgment.
+        tests:
+          - not_null
+          - unique
+      - name: full_date
+        description: The calendar date. Null on the unknown member.
+      - name: year
+        description: 4-digit year.
+      - name: quarter
+        description: Calendar quarter, 1-4.
+      - name: month
+        description: Calendar month, 1-12.
+      - name: decade
+        description: Decade the date falls in, e.g. 1990. Useful for long-range case law trends.
+      - name: is_weekend
+        description: True for Saturday and Sunday.
+
+  - name: fct_judgment
+    description: >
+      One row per legal document in the corpus — legislation, bills and
+      court decisions alike.
+      GRAIN: one row per doc_id. Materialised incrementally on doc_id, so
+      reprocessing a bronze batch merges rather than duplicating.
+    columns:
+      - name: doc_id
+        description: Degenerate dimension — SHA-256 of source_url. Primary key.
+        tests:
+          - not_null
+          - unique
+      - name: jurisdiction_key
+        description: FK to dim_jurisdiction.
+        tests:
+          - not_null
+          # The test type that actually catches broken joins, and the one
+          # most portfolio projects omit.
+          - relationships:
+              to: ref('dim_jurisdiction')
+              field: jurisdiction_key
+      - name: court_key
+        description: FK to dim_court. Points at the 'Not applicable' member for non-decisions.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_court')
+              field: court_key
+      - name: date_key
+        description: FK to dim_date. Points at the unknown member where no date could be parsed.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+      - name: citation
+        description: Degenerate dimension — the document's citation string.
+      - name: source_url
+        description: Degenerate dimension — canonical source URL.
+        tests:
+          - not_null
+      - name: doc_type
+        description: primary_legislation, secondary_legislation, bill, or decision.
+        tests:
+          - accepted_values:
+              values: [primary_legislation, secondary_legislation, bill, decision]
+      - name: decision_date
+        description: Date of the decision or instrument. Null where unparseable.
+      - name: decision_year
+        description: Integer year. Null where unparseable.
+      - name: text_length
+        description: MEASURE: character count of the document text.
+        tests:
+          - not_null
+      - name: word_count
+        description: MEASURE: approximate whitespace-delimited token count.
+      - name: ingested_at
+        description: UTC timestamp the parser processed this record. Drives the incremental filter.
+        tests:
+          - not_null
+      - name: jurisdiction_code
+        description: Partition key.
+      - name: year_partition
+        description: Partition key — 4-digit year or 'unknown'.
+
+  - name: agg_judgments_by_court_year
+    description: >
+      Judgment counts and length statistics by court and year.
+      GRAIN: one row per (court_name, decision_year).
+    columns:
+      - name: court_name
+        description: Court the judgments were handed down in.
+        tests:
+          - not_null
+      - name: decision_year
+        description: Year of decision.
+      - name: judgment_count
+        description: Number of judgments for this court and year.
+        tests:
+          - not_null
+      - name: avg_text_length
+        description: Mean character count across judgments in the group.

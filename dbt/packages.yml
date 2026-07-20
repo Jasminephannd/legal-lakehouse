@@ -1,0 +1,4 @@
+packages:
+  # Needed for date_spine (dim_date) and generate_surrogate_key.
+  - package: dbt-labs/dbt_utils
+    version: [">=1.1.0", "<2.0.0"]

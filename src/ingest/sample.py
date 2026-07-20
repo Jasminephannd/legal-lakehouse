@@ -5,10 +5,11 @@ dicts and returns a subset. run.py is responsible for materializing a
 shuffled prefix of the streamed corpus into memory before calling this;
 that boundary is what keeps this module unit-testable.
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Sequence
+from collections.abc import Sequence
 
 from src.ingest.config import KNOWN_JURISDICTIONS, TARGET_SAMPLE_SIZE
 

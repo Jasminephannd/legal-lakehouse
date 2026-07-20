@@ -27,9 +27,7 @@ def test_extract_year_null_becomes_unknown():
 def test_covers_multiple_jurisdictions_when_present():
     jurisdictions = ["commonwealth", "new_south_wales", "tasmania"]
     records = [
-        _make_record(j, f"{2015 + i % 5}-01-01", f"{j}-{i}")
-        for j in jurisdictions
-        for i in range(200)
+        _make_record(j, f"{2015 + i % 5}-01-01", f"{j}-{i}") for j in jurisdictions for i in range(200)
     ]
     sample = stratified_sample(records, target_total=90, jurisdictions=jurisdictions)
     jurisdictions_seen = {r["jurisdiction"] for r in sample}
@@ -77,9 +75,7 @@ def test_null_dates_bucketed_as_unknown_not_dropped():
 def test_sample_never_exceeds_target_total():
     jurisdictions = ["commonwealth", "tasmania"]
     records = [
-        _make_record(j, f"{2010 + i % 10}-01-01", f"{j}-{i}")
-        for j in jurisdictions
-        for i in range(500)
+        _make_record(j, f"{2010 + i % 10}-01-01", f"{j}-{i}") for j in jurisdictions for i in range(500)
     ]
     sample = stratified_sample(records, target_total=37, jurisdictions=jurisdictions)
     assert len(sample) == 37

@@ -1,3 +1,22 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort (import ordering)
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+]
+ignore = [
+    "E501",   # line length — formatter handles this; the linter flagging it too is noise
+    "UP017",  # datetime.UTC alias is 3.11+; timezone.utc works everywhere and reads no worse.
+              # The Lambda image and CI are both 3.12, but pinning the source to 3.11+ for a
+              # cosmetic alias makes the repo fail on any older local interpreter for no gain.
+]

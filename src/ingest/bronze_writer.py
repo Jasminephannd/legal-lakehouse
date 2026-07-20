@@ -3,13 +3,14 @@ manifest. Bronze is immutable and untransformed — this module batches
 and compresses only; it does not clean, validate, or reshape records.
 That's Block 4's job, working from silver.
 """
+
 from __future__ import annotations
 
 import gzip
 import json
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Iterator, Optional, Sequence
 
 import boto3
 
@@ -37,9 +38,9 @@ class BronzeWriteResult:
 def write_bronze_batches(
     records: Sequence[dict],
     bucket: str,
-    ingest_date: Optional[date] = None,
+    ingest_date: date | None = None,
     batch_size: int = BATCH_SIZE,
-    source_revision: Optional[str] = None,
+    source_revision: str | None = None,
     s3_client=None,
 ) -> BronzeWriteResult:
     """Writes `records` to

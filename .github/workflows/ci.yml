@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+# No AWS credentials anywhere in this workflow — every job here runs
+# without touching the account. That's deliberate: PR CI from a fork
+# should never be able to reach real infrastructure.
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: ruff check
+        run: ruff check src tests
+
+      - name: ruff format --check
+        run: ruff format --check src tests
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: pytest
+        # The whole suite runs without AWS credentials by design — pure
+        # functions are separated from I/O throughout src/.
+        run: pytest -v --tb=short
+
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.0"
+
+      - name: terraform fmt -check
+        run: terraform fmt -check -recursive infra/
+
+      - name: terraform validate (main)
+        # -backend=false: validate syntax and provider schemas without
+        # needing credentials or touching remote state.
+        run: |
+          cd infra/main
+          terraform init -backend=false
+          terraform validate
+
+      - name: terraform validate (bootstrap)
+        run: |
+          cd infra/bootstrap
+          terraform init -backend=false
+          terraform validate
+
+  dbt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: Cache dbt packages
+        uses: actions/cache@v4
+        with:
+          path: dbt/dbt_packages
+          key: dbt-packages-${{ hashFiles('dbt/packages.yml') }}
+
+      - name: dbt deps
+        working-directory: dbt
+        run: dbt deps
+
+      - name: dbt parse
+        # parse compiles the whole project — catching bad refs, broken
+        # Jinja and malformed YAML — without needing AWS credentials.
+        working-directory: dbt
+        env:
+          DBT_PROFILES_DIR: ${{ github.workspace }}/dbt
+          ATHENA_S3_STAGING_DIR: s3://placeholder/athena-results/
+        run: dbt parse

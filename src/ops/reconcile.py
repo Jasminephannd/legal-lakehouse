@@ -11,6 +11,7 @@ line counts, silver via Athena) is pure and unit-tested where it's
 plain arithmetic/string parsing (tests/test_reconcile.py). The actual
 AWS/Athena calls are not — same split as ingest and parser/handler.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -56,7 +57,9 @@ def format_report(result: ReconciliationResult) -> str:
     ]
     if not result.balanced:
         lines.append(f"delta (bronze - (silver + rejected)): {result.delta}")
-        lines.append("Records are being lost somewhere between bronze and silver/rejected — investigate before moving on.")
+        lines.append(
+            "Records are being lost somewhere between bronze and silver/rejected — investigate before moving on."
+        )
     return "\n".join(lines)
 
 
@@ -81,7 +84,9 @@ def get_rejected_count(bucket: str, ingest_date: str, s3_client) -> int:
     return total
 
 
-def get_silver_count(athena_client, poll_interval_seconds: float = 1.0, max_wait_seconds: float = 60.0) -> int:
+def get_silver_count(
+    athena_client, poll_interval_seconds: float = 1.0, max_wait_seconds: float = 60.0
+) -> int:
     query = f"SELECT COUNT(*) AS n FROM {SILVER_TABLE}"
     exec_id = athena_client.start_query_execution(
         QueryString=query,
@@ -90,7 +95,9 @@ def get_silver_count(athena_client, poll_interval_seconds: float = 1.0, max_wait
 
     waited = 0.0
     while waited < max_wait_seconds:
-        status = athena_client.get_query_execution(QueryExecutionId=exec_id)["QueryExecution"]["Status"]["State"]
+        status = athena_client.get_query_execution(QueryExecutionId=exec_id)["QueryExecution"]["Status"][
+            "State"
+        ]
         if status in ("SUCCEEDED", "FAILED", "CANCELLED"):
             break
         time.sleep(poll_interval_seconds)
@@ -105,7 +112,9 @@ def get_silver_count(athena_client, poll_interval_seconds: float = 1.0, max_wait
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Reconcile bronze/silver/rejected counts for an ingest date.")
+    parser = argparse.ArgumentParser(
+        description="Reconcile bronze/silver/rejected counts for an ingest date."
+    )
     parser.add_argument("--bucket", required=True)
     parser.add_argument("--ingest-date", required=True, help="e.g. 2026-07-20")
     args = parser.parse_args()

@@ -1,0 +1,38 @@
+# Committed deliberately, with env_var references rather than hardcoded
+# values — CI injects its own, and no account-specific strings end up in
+# a public repo.
+#
+# Local setup (PowerShell):
+#   setx ATHENA_S3_STAGING_DIR "s3://legal-lakehouse-data-jasminephannd/athena-results/"
+#   setx ATHENA_DATABASE "legal_lakehouse"
+#   setx ATHENA_WORK_GROUP "legal-lakehouse"
+#
+# dbt reads this from ./dbt by default when DBT_PROFILES_DIR is set, or
+# copy it to ~/.dbt/profiles.yml. Run `dbt debug` before writing a single
+# model — a failure here is almost always the staging dir or IAM.
+legal_lakehouse:
+  target: dev
+  outputs:
+    dev:
+      type: athena
+      s3_staging_dir: "{{ env_var('ATHENA_S3_STAGING_DIR') }}"
+      region_name: ap-southeast-2
+      database: awsdatacatalog
+      schema: "{{ env_var('ATHENA_DATABASE', 'legal_lakehouse') }}"
+      work_group: "{{ env_var('ATHENA_WORK_GROUP', 'legal-lakehouse') }}"
+      threads: 4
+      # Gold-layer tables are written under their own prefix, kept
+      # separate from the silver Parquet the parser Lambda owns.
+      s3_data_dir: "s3://legal-lakehouse-data-jasminephannd/gold/"
+      s3_data_naming: schema_table
+
+    prod:
+      type: athena
+      s3_staging_dir: "{{ env_var('ATHENA_S3_STAGING_DIR') }}"
+      region_name: ap-southeast-2
+      database: awsdatacatalog
+      schema: "{{ env_var('ATHENA_DATABASE_PROD', 'legal_lakehouse_prod') }}"
+      work_group: "{{ env_var('ATHENA_WORK_GROUP', 'legal-lakehouse') }}"
+      threads: 4
+      s3_data_dir: "s3://legal-lakehouse-data-jasminephannd/gold/"
+      s3_data_naming: schema_table

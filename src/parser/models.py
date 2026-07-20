@@ -2,10 +2,11 @@
 is what every record in silver must satisfy, regardless of how it got
 there.
 """
+
 from __future__ import annotations
 
-from datetime import date as date_type, datetime
-from typing import Optional
+from datetime import date as date_type
+from datetime import datetime
 
 from pydantic import BaseModel, field_validator
 
@@ -18,9 +19,9 @@ class ParsedDoc(BaseModel):
     doc_id: str  # SHA-256 hex digest of source_url — deterministic, gives idempotency
     jurisdiction: str
     doc_type: str
-    court: Optional[str] = None  # only populated for doc_type == "decision"; see parser.py
+    court: str | None = None  # only populated for doc_type == "decision"; see parser.py
     citation: str
-    decision_date: Optional[date_type] = None
+    decision_date: date_type | None = None
     year: str  # 4-digit string, or "unknown" — see parser.py's _infer_year
     source_url: str
     text: str

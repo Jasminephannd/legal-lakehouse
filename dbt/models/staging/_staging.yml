@@ -1,0 +1,63 @@
+version: 2
+
+models:
+  - name: stg_judgments
+    description: >
+      One row per validated legal document, with types cast and codes
+      standardised. Grain: one row per doc_id. Materialised as a view —
+      free to store, fast to iterate on.
+    columns:
+      - name: doc_id
+        description: SHA-256 of source_url. Primary key of this model.
+        tests:
+          # Tested here at the staging layer so failures surface early,
+          # rather than showing up as a broken join in the fact table.
+          - not_null
+          - unique
+      - name: jurisdiction_code
+        description: Lowercase Australian jurisdiction code, e.g. new_south_wales.
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                - commonwealth
+                - new_south_wales
+                - queensland
+                - western_australia
+                - south_australia
+                - tasmania
+                - norfolk_island
+      - name: doc_type
+        description: Document category from the source corpus.
+        tests:
+          - not_null
+          - accepted_values:
+              values: [primary_legislation, secondary_legislation, bill, decision]
+      - name: court_name
+        description: Resolved court name. Null for non-decision documents by design.
+      - name: citation
+        description: Document title / neutral citation.
+      - name: decision_date
+        description: Date of the decision or instrument. Null where the source had none.
+      - name: year_partition
+        description: The Hive partition value — 4-digit year, or the literal 'unknown'.
+        tests:
+          - not_null
+      - name: decision_year
+        description: Integer year, or null where year_partition is 'unknown'.
+      - name: source_url
+        description: Canonical URL of the source document.
+        tests:
+          - not_null
+      - name: text
+        description: Full extracted document text.
+      - name: text_length
+        description: Character count.
+        tests:
+          - not_null
+      - name: word_count
+        description: Whitespace-delimited token count. Approximate by design.
+      - name: ingested_at
+        description: UTC timestamp the parser processed this record.
+        tests:
+          - not_null

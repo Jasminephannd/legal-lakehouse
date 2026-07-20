@@ -1,7 +1,7 @@
+import io
 from datetime import datetime, timezone
 
 import pyarrow.parquet as pq
-import io
 
 from src.parser.handler import (
     group_by_jurisdiction_year,

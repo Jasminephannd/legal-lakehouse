@@ -7,13 +7,15 @@ Writing RejectedRecord instances out to the rejected/ prefix is the
 handler's job, not this module's — keeping S3 out of here is what makes
 it fast to iterate on.
 """
+
 from __future__ import annotations
 
 import hashlib
 import re
 from dataclasses import dataclass
-from datetime import date as date_type, datetime, timezone
-from typing import Any, Optional, Union
+from datetime import date as date_type
+from datetime import datetime, timezone
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -74,22 +76,53 @@ def _sha256_doc_id(source_url: str) -> str:
     return hashlib.sha256(source_url.encode("utf-8")).hexdigest()
 
 
-def _parse_date(raw_date: Optional[str]) -> Optional[date_type]:
-    """The corpus stores `date` as ISO 8601 "YYYY-MM-DD" or null — already
-    normalised by the corpus's own scraper, which sidesteps most of the
-    "several formats" problem the plan warns about. Still doesn't trust
-    it blindly: null and any string that isn't valid ISO-8601 both
-    resolve to None here rather than raising.
+# Ordered most- to least-specific. The corpus's dataset card documents
+# `date` as "YYYY-MM-DD", but the actual values are 19 characters —
+# "2008-10-08 00:00:00" — i.e. a datetime with a zeroed time component.
+# An earlier version of this function only accepted "%Y-%m-%d" and
+# therefore silently failed on EVERY dated record, dumping the whole
+# corpus into the year='unknown' partition.
+#
+# The lesson, which the project plan states explicitly and I under-applied:
+# don't trust a handed-over schema. Verifying the field *names* against
+# the dataset card wasn't enough — the value *format* needed checking
+# against real values too.
+_DATE_FORMATS = (
+    "%Y-%m-%d %H:%M:%S",  # the format the corpus actually uses
+    "%Y-%m-%dT%H:%M:%S",  # ISO-8601 with a T separator
+    "%Y-%m-%d",  # the format the dataset card documents
+)
+
+
+def _parse_date(raw_date: str | None) -> date_type | None:
+    """Parse the corpus's `date` field to a date, or None.
+
+    Tolerant by design: null, empty, and any unrecognised format all
+    resolve to None rather than raising, so a single odd value can never
+    kill a batch. Callers map None onto the year='unknown' partition.
     """
     if not raw_date:
         return None
+
+    value = raw_date.strip()
+    if not value:
+        return None
+
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+
+    # Last resort: fromisoformat handles offsets and fractional seconds
+    # that the explicit formats above don't cover.
     try:
-        return datetime.strptime(raw_date, "%Y-%m-%d").date()
+        return datetime.fromisoformat(value).date()
     except ValueError:
         return None
 
 
-def _infer_year(decision_date: Optional[date_type]) -> str:
+def _infer_year(decision_date: date_type | None) -> str:
     # Explicit rule from the plan: a missing/unparseable date becomes the
     # "unknown" partition, not a crash and not a dropped record.
     if decision_date is None:
@@ -97,7 +130,7 @@ def _infer_year(decision_date: Optional[date_type]) -> str:
     return str(decision_date.year)
 
 
-def _infer_court(doc_type: str, citation: str, source: Optional[str]) -> Optional[str]:
+def _infer_court(doc_type: str, citation: str, source: str | None) -> str | None:
     if doc_type != "decision":
         return None
     match = _CITATION_COURT_RE.search(citation or "")
@@ -109,7 +142,7 @@ def _infer_court(doc_type: str, citation: str, source: Optional[str]) -> Optiona
     return None
 
 
-def parse_record(raw: dict[str, Any]) -> Union[ParsedDoc, RejectedRecord]:
+def parse_record(raw: dict[str, Any]) -> ParsedDoc | RejectedRecord:
     now = datetime.now(timezone.utc)
     try:
         source_url = raw.get("url") or ""

@@ -1,0 +1,27 @@
+name: "legal_lakehouse"
+version: "1.0.0"
+config-version: 2
+
+profile: "legal_lakehouse"
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+seed-paths: ["seeds"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  legal_lakehouse:
+    staging:
+      # Views are free and fast to iterate on. Staging does renaming,
+      # casting and trimming only — no joins, no business logic.
+      +materialized: view
+      +schema: staging
+    marts:
+      # Dimensions and facts are the gold layer.
+      +materialized: table
+      +schema: gold

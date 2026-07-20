@@ -11,6 +11,7 @@ record through parse_record, and prints:
   - how many parsed cleanly vs got rejected, and why
   - a couple of sample ParsedDoc fields so you can eyeball them
 """
+
 from __future__ import annotations
 
 import argparse
@@ -71,7 +72,7 @@ def main() -> None:
             )
 
     if rejected:
-        print(f"\nSample of 1 rejected record:")
+        print("\nSample of 1 rejected record:")
         r = rejected[0]
         print(f"  error={r.error}")
         print(f"  raw keys={list(r.raw.keys())}")

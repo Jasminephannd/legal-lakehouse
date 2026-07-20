@@ -7,6 +7,7 @@ This is the only module in src/ingest that touches the network or AWS —
 sample.py and bronze_writer.py are pure and unit-tested on their own in
 tests/test_ingest_sample.py.
 """
+
 from __future__ import annotations
 
 import argparse

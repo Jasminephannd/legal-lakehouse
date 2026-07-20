@@ -1,0 +1,80 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+
+# The block everyone forgets. Without id-token: write, the OIDC handshake
+# in configure-aws-credentials fails with an opaque credentials error.
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-southeast-2
+  ECR_REPOSITORY: legal-lakehouse-parser
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        # No long-lived secrets — this assumes a role scoped in
+        # infra/main/oidc.tf to this repo's main branch only.
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push parser image
+        # --provenance=false --sbom=false is REQUIRED, not optional:
+        # Buildx's default attestations wrap the image in an OCI image
+        # index, and Lambda only accepts a plain single-arch manifest.
+        # Without these flags the push may succeed but the Lambda update
+        # fails with "image manifest ... is not supported".
+        #
+        # Tagged with the commit SHA, never `latest` — combined with the
+        # repo's IMMUTABLE tag policy, any deployed Lambda is traceable
+        # back to exactly one commit.
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          docker buildx build \
+            --platform linux/arm64 \
+            --provenance=false \
+            --sbom=false \
+            -f src/parser/Dockerfile \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }} \
+            --push \
+            .
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.0"
+
+      - name: Terraform apply
+        working-directory: infra/main
+        run: |
+          terraform init
+          terraform apply -auto-approve -var="parser_image_tag=${{ github.sha }}"
+
+      - name: Install dbt
+        run: pip install -r requirements.txt
+
+      - name: dbt build (prod)
+        working-directory: dbt
+        env:
+          DBT_PROFILES_DIR: ${{ github.workspace }}/dbt
+          ATHENA_S3_STAGING_DIR: ${{ secrets.ATHENA_S3_STAGING_DIR }}
+        run: |
+          dbt deps
+          dbt build --target prod

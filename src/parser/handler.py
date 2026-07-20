@@ -12,26 +12,24 @@ The grouping/key-naming logic below is kept as plain functions
 without mocking S3 — see tests/test_handler.py. Only _read_batch,
 _write_silver_group, and _write_rejected actually touch AWS.
 """
+
 from __future__ import annotations
 
 import gzip
 import io
 import json
-import logging
 import os
+import time
 import urllib.parse
 from collections import defaultdict
-from datetime import datetime
 from typing import Any
 
 import boto3
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from src.parser.observability import emit_metrics, log_event
 from src.parser.parser import ParsedDoc, RejectedRecord, parse_record
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 AWS_REGION = os.environ.get("AWS_REGION", "ap-southeast-2")
 _s3_client = None
@@ -101,8 +99,7 @@ PARTITION_KEY_FIELDS = {"jurisdiction", "year"}
 
 def parsed_docs_to_parquet_bytes(docs: list[ParsedDoc]) -> bytes:
     rows = [
-        {k: v for k, v in d.model_dump(mode="json").items() if k not in PARTITION_KEY_FIELDS}
-        for d in docs
+        {k: v for k, v in d.model_dump(mode="json").items() if k not in PARTITION_KEY_FIELDS} for d in docs
     ]
     table = pa.Table.from_pylist(rows)
     buf = io.BytesIO()
@@ -150,10 +147,11 @@ def lambda_handler(event: dict, context: Any) -> dict:
     for record in event.get("Records", []):
         bucket = record["s3"]["bucket"]["name"]
         key = urllib.parse.unquote_plus(record["s3"]["object"]["key"])
-        logger.info("Processing s3://%s/%s", bucket, key)
+        started = time.perf_counter()
+
+        log_event(event="batch_started", bucket=bucket, source_key=key)
 
         raw_records = _read_batch(bucket, key)
-        logger.info("Batch has %d records.", len(raw_records))
 
         parsed: list[ParsedDoc] = []
         rejected: list[RejectedRecord] = []
@@ -163,6 +161,17 @@ def lambda_handler(event: dict, context: Any) -> dict:
                 parsed.append(result)
             else:
                 rejected.append(result)
+                # Per-record structured log for every rejection, so the
+                # Day 3 failure taxonomy can be built straight from Logs
+                # Insights rather than by re-reading rejected/ from S3.
+                log_event(
+                    event="record_rejected",
+                    source_key=key,
+                    outcome="rejected",
+                    error_type=type(result).__name__,
+                    error=result.error.splitlines()[0] if result.error else None,
+                    version_id=result.raw.get("version_id"),
+                )
 
         silver_keys = [
             _write_silver_group(bucket, jurisdiction, year, docs)
@@ -170,12 +179,26 @@ def lambda_handler(event: dict, context: Any) -> dict:
         ]
         rejected_key = _write_rejected(bucket, key, rejected)
 
-        logger.info(
-            "Wrote %d silver file(s) (%d docs) and %d rejected record(s) from %s",
-            len(silver_keys),
-            len(parsed),
-            len(rejected),
-            key,
+        duration_ms = (time.perf_counter() - started) * 1000
+
+        log_event(
+            event="batch_completed",
+            source_key=key,
+            outcome="ok",
+            records_in=len(raw_records),
+            parsed_count=len(parsed),
+            rejected_count=len(rejected),
+            silver_files=len(silver_keys),
+            duration_ms=round(duration_ms, 2),
+        )
+
+        # Separate line, EMF-shaped — this is what CloudWatch turns into
+        # real metrics (RecordsParsed / RecordsRejected / ParseDurationMs).
+        emit_metrics(
+            records_parsed=len(parsed),
+            records_rejected=len(rejected),
+            parse_duration_ms=duration_ms,
+            source_key=key,
         )
 
         results.append(
