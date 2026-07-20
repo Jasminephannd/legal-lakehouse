@@ -1,7 +1,43 @@
 variable "github_repo" {
-  description = "GitHub \"org/repo\" allowed to assume the deploy role via OIDC."
+  description = "GitHub \"owner/repo\" allowed to assume the deploy role via OIDC (classic sub claim form)."
   type        = string
   default     = "Jasminephannd/legal-lakehouse"
+}
+
+# --- Immutable-ID form of the OIDC sub claim -----------------------------
+#
+# GitHub issues the sub claim with numeric IDs appended to the owner and
+# repo names. These four variables build that form. To find the values for
+# a different repo, decode the OIDC token in a workflow run (see the
+# "Decode the real OIDC token claims" step in .github/workflows/cd.yml) —
+# they are NOT visible in the rendered `github.*` workflow context.
+#
+# Alternatively:
+#   owner id: curl -s https://api.github.com/users/<owner> | jq .id
+#   repo id:  curl -s https://api.github.com/repos/<owner>/<repo> | jq .id
+
+variable "github_repo_owner" {
+  description = "GitHub account/org name, e.g. Jasminephannd."
+  type        = string
+  default     = "Jasminephannd"
+}
+
+variable "github_owner_id" {
+  description = "Immutable numeric GitHub account ID, as it appears in the OIDC sub claim."
+  type        = string
+  default     = "57733436"
+}
+
+variable "github_repo_name" {
+  description = "Repository name without the owner prefix."
+  type        = string
+  default     = "legal-lakehouse"
+}
+
+variable "github_repo_id" {
+  description = "Immutable numeric GitHub repository ID, as it appears in the OIDC sub claim."
+  type        = string
+  default     = "1306134894"
 }
 
 variable "state_bucket_name" {

@@ -213,15 +213,31 @@ Cost design notes, pending real figures:
 
 Documented because each cost real time and none is obvious from the docs.
 
-**An IAM role whose name contains "github" silently breaks OIDC role assumption.** This is the single most expensive bug in the project — hours, not minutes — so it's documented in full.
+**GitHub's OIDC `sub` claim contains immutable numeric IDs that no documentation shows.** This was the single most expensive bug in the project — hours, not minutes — so it's documented in full.
 
 *Symptom:* `cd.yml` fails at the credentials step with `Could not assume role with OIDC: Not authorized to perform sts:AssumeRoleWithWebIdentity`, while every value on the AWS side verifies as correct.
 
-*Cause:* an open bug in `aws-actions/configure-aws-credentials` ([#1093](https://github.com/aws-actions/configure-aws-credentials/issues/1093), [#953](https://github.com/aws-actions/configure-aws-credentials/issues/953)) — a role whose **name** contains the string `github` fails to assume. The suspected mechanism is GitHub Actions' automatic secret-masking interfering with the role name inside the action, so the ARN that reaches STS isn't the one configured. Nothing in the AWS configuration is wrong, which is exactly why it's so hard to find.
+*Cause:* the `sub` claim GitHub actually issues is
 
-*Fix:* rename the role. `legal-lakehouse-github-deploy` → `legal-lakehouse-ci-deploy`.
+```
+repo:Jasminephannd@57733436/legal-lakehouse@1306134894:ref:refs/heads/main
+```
 
-*Why it took so long:* the error message is identical whether the secret is missing, the trust policy is wrong, or the audience mismatches — so the obvious candidates get checked first, and they all pass. Everything below was verified as correct **before** the real cause was found, which is the point: a clean bill of health on every input is itself a signal that the fault is in the tooling, not the config.
+not the classic, universally-documented shape
+
+```
+repo:Jasminephannd/legal-lakehouse:ref:refs/heads/main
+```
+
+GitHub appends **immutable numeric IDs** to both the owner and the repository name. The trust policy, written from AWS's and GitHub's own documentation, never matched.
+
+*Why it's so hard to spot:* the IDs are invisible everywhere you'd naturally look. `github.repository` in the workflow context renders as the plain `owner/repo`. The IAM trust policy, OIDC provider URL, audience, `ClientIDList`, and role ARN all verify as correct — because they are. CloudTrail logs nothing, because the request is rejected at token validation. The only way to see it is to **decode the issued JWT**, which is why `cd.yml` now has a permanent step that does exactly that.
+
+*Fix:* list both `sub` forms in the trust policy (see `infra/main/oidc.tf`). The ID form is the stronger of the two — numeric IDs are immutable, so deleting and recreating a repo under the same name yields a different ID and won't match, closing a name-reuse hole the classic form leaves open.
+
+*A false lead worth recording:* the deploy role was originally named `legal-lakehouse-github-deploy`, and there is a real open bug where a role name containing `github` breaks this action ([#1093](https://github.com/aws-actions/configure-aws-credentials/issues/1093), [#953](https://github.com/aws-actions/configure-aws-credentials/issues/953)). That looked like a perfect match for the symptoms and it was **not** the cause here. The role is still named `legal-lakehouse-ci-deploy` to avoid the known issue, but renaming it fixed nothing.
+
+*The transferable lesson:* when every input verifies as correct, stop re-verifying inputs and go read what's actually on the wire.
 
 | Checked | Result |
 |---|---|
@@ -232,10 +248,11 @@ Documented because each cost real time and none is obvious from the docs.
 | Provider `ClientIDList` | `["sts.amazonaws.com"]` — matches the audience the action requests |
 | Trust policy `aud` condition | `StringEquals sts.amazonaws.com` — matches |
 | Trust policy `sub` condition | `repo:<owner>/legal-lakehouse:ref:refs/heads/main` |
-| Actual claim GitHub sends | `repo:<owner>/legal-lakehouse:ref:refs/heads/main` — **identical, character for character** |
+| Rendered workflow context | `github.repository` = `<owner>/legal-lakehouse` — appeared to match exactly |
 | CA thumbprint | Replaced a placeholder with GitHub's two real intermediate thumbprints. No change (consistent with AWS's documented behaviour of ignoring it since July 2023) |
-| CloudTrail `AssumeRoleWithWebIdentity` | No events in `us-east-1` or `ap-southeast-2` — consistent with the request never reaching STS with the correct ARN |
-| **Role name** | **`legal-lakehouse-github-deploy` — contained `github`. This was the bug.** |
+| CloudTrail `AssumeRoleWithWebIdentity` | No events in `us-east-1` or `ap-southeast-2` — the request is rejected at token validation, before account-level policy evaluation |
+| Role name containing `github` | Renamed to `legal-lakehouse-ci-deploy`. A real known issue, but **not** the cause here |
+| **Decoded JWT `sub` claim** | **`repo:<owner>@57733436/legal-lakehouse@1306134894:ref:refs/heads/main` — immutable IDs appended. This was the bug.** |
 
 A wildcard trust policy (`repo:owner/repo:*`) was written as a diagnostic and reverted **without ever being applied** — loosening it would have masked the real cause and shipped the exact misconfiguration this project is meant to demonstrate avoiding.
 

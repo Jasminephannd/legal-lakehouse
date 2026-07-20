@@ -48,10 +48,37 @@ data "aws_iam_policy_document" "github_oidc_trust" {
       values   = ["sts.amazonaws.com"]
     }
 
+    # GitHub now issues the `sub` claim with IMMUTABLE NUMERIC IDS
+    # appended to both the owner and the repository name:
+    #
+    #   repo:Jasminephannd@57733436/legal-lakehouse@1306134894:ref:refs/heads/main
+    #                     ^^^^^^^^^                ^^^^^^^^^^^
+    #
+    # not the classic, widely-documented shape:
+    #
+    #   repo:Jasminephannd/legal-lakehouse:ref:refs/heads/main
+    #
+    # This is invisible from the workflow context — `github.repository`
+    # still renders as the plain "owner/repo", so a policy written from
+    # the docs (or from the rendered context) silently fails to match and
+    # STS returns only "Not authorized to perform
+    # sts:AssumeRoleWithWebIdentity". The only way to see it is to decode
+    # the issued JWT — see the "Decode the real OIDC token claims" step in
+    # .github/workflows/cd.yml.
+    #
+    # Both forms are listed so the policy keeps working whichever shape
+    # GitHub issues. The ID form is actually the STRONGER of the two: the
+    # numeric IDs are immutable, so deleting and recreating a repo under
+    # the same name produces a different ID and will NOT match — which
+    # closes a real (if obscure) name-reuse hole that the classic form
+    # leaves open.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repo}:ref:refs/heads/main"]
+      values = [
+        "repo:${var.github_repo_owner}@${var.github_owner_id}/${var.github_repo_name}@${var.github_repo_id}:ref:refs/heads/main",
+        "repo:${var.github_repo}:ref:refs/heads/main",
+      ]
     }
   }
 }
