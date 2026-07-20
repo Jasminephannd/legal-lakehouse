@@ -94,6 +94,14 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # Proves the assumption actually worked and shows WHICH identity we
+      # got — rather than inferring success from the absence of an error.
+      # The assumed-role ARN printed here should end in
+      # ".../legal-lakehouse-ci-deploy/<session>"; anything else means the
+      # workflow is running as an identity we didn't intend.
+      - name: Confirm assumed identity
+        run: aws sts get-caller-identity
+
       - name: Login to ECR
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
