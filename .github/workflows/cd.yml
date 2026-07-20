@@ -109,7 +109,39 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # The ECR repo uses IMMUTABLE tags and images are tagged with the
+      # commit SHA. That combination means a re-run of the SAME commit
+      # tries to push a tag that already exists and fails:
+      #
+      #   The image tag '<sha>' already exists ... and cannot be
+      #   overwritten because the tag is immutable.
+      #
+      # Re-running is precisely what you do when a LATER step failed, so
+      # without this guard the pipeline can never be retried — you'd have
+      # to push an empty commit just to get a new SHA.
+      #
+      # Skipping the build when the tag already exists is also the
+      # correct behaviour on its own terms: same commit, same image, so
+      # rebuilding is wasted work. The tag being immutable is what makes
+      # that inference safe.
+      - name: Does this image already exist in ECR?
+        id: image-check
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          if aws ecr describe-images \
+               --repository-name "$ECR_REPOSITORY" \
+               --image-ids imageTag="$IMAGE_TAG" \
+               --region "$AWS_REGION" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Image $ECR_REPOSITORY:$IMAGE_TAG already exists — skipping build."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Image $ECR_REPOSITORY:$IMAGE_TAG not found — building."
+          fi
+
       - name: Build and push parser image
+        if: steps.image-check.outputs.exists == 'false'
         # --provenance=false --sbom=false is REQUIRED, not optional:
         # Buildx's default attestations wrap the image in an OCI image
         # index, and Lambda only accepts a plain single-arch manifest.
