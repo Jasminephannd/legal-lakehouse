@@ -185,11 +185,24 @@ data "aws_iam_policy_document" "deploy_permissions" {
       "ecr:SetRepositoryPolicy",
       "ecr:GetRepositoryPolicy",
       "ecr:GetAuthorizationToken",
+
+      # --- the actual push sequence ---
+      # Easy to under-scope, because a docker push is not one API call.
+      # BatchGetImage and GetDownloadUrlForLayer are READ actions, but a
+      # push still needs them: the client issues
+      #   HEAD /v2/<repo>/manifests/<tag>
+      # to check whether the manifest already exists before uploading,
+      # and that maps to ecr:BatchGetImage. Omitting it fails the push at
+      # the very last step with a bare "403 Forbidden" — after every layer
+      # has already uploaded successfully, which makes it look like a
+      # registry problem rather than a permissions one.
       "ecr:BatchCheckLayerAvailability",
-      "ecr:PutImage",
+      "ecr:BatchGetImage",
+      "ecr:GetDownloadUrlForLayer",
       "ecr:InitiateLayerUpload",
       "ecr:UploadLayerPart",
       "ecr:CompleteLayerUpload",
+      "ecr:PutImage",
     ]
     resources = ["*"] # ecr:GetAuthorizationToken in particular only works against "*"
   }
