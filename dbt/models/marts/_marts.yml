@@ -127,11 +127,11 @@ models:
       - name: decision_year
         description: Integer year. Null where unparseable.
       - name: text_length
-        description: MEASURE: character count of the document text.
+        description: "MEASURE: character count of the document text."
         tests:
           - not_null
       - name: word_count
-        description: MEASURE: approximate whitespace-delimited token count.
+        description: "MEASURE: approximate whitespace-delimited token count."
       - name: ingested_at
         description: UTC timestamp the parser processed this record. Drives the incremental filter.
         tests:
