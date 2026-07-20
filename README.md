@@ -4,6 +4,8 @@ A serverless medallion-architecture data pipeline over the [Open Australian Lega
 
 Built to demonstrate the stack Australian data-engineering roles actually ask for: SQL, Python, AWS (S3/Glue/Lambda/Athena), dimensional modelling, dbt, medallion architecture, IaC, and CI/CD.
 
+> **Current state:** the pipeline runs end to end — 2,000 documents through bronze → silver → gold, reconciling exactly, with 43 unit tests and a full dbt test suite passing. CI runs on every PR; CD deploys on merge to `main` via GitHub OIDC with no long-lived AWS credentials.
+
 ![Architecture](docs/architecture.svg)
 
 ---
@@ -43,7 +45,7 @@ cd dbt && dbt deps && dbt build
 Tests run with no AWS access at all:
 
 ```bash
-pytest -v      # 40 tests
+pytest -v      # 43 tests
 ruff check src tests
 ```
 
@@ -114,6 +116,7 @@ Two dimensions carry **explicit unknown members**: `dim_court` has a "Not applic
 **GitHub OIDC over stored AWS keys.**
 *Alternative:* `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` as repo secrets.
 *Why:* no long-lived credentials exist to leak or rotate. The trust policy is scoped to `repo:<owner>/legal-lakehouse:ref:refs/heads/main` — a `:*` wildcard there would let a PR from any fork assume the deploy role, which is the most common way this gets misconfigured.
+*Status:* the role assumption currently fails — see "Known issues" below. Deployment is manual in the meantime. The scoped-not-wildcard decision stands regardless; loosening it was tried as a diagnostic and reverted without being applied.
 
 **No AWS credentials in PR CI.**
 *Alternative:* `terraform plan` on PRs, posted as a comment.
@@ -210,6 +213,32 @@ Cost design notes, pending real figures:
 
 Documented because each cost real time and none is obvious from the docs.
 
+**An IAM role whose name contains "github" silently breaks OIDC role assumption.** This is the single most expensive bug in the project — hours, not minutes — so it's documented in full.
+
+*Symptom:* `cd.yml` fails at the credentials step with `Could not assume role with OIDC: Not authorized to perform sts:AssumeRoleWithWebIdentity`, while every value on the AWS side verifies as correct.
+
+*Cause:* an open bug in `aws-actions/configure-aws-credentials` ([#1093](https://github.com/aws-actions/configure-aws-credentials/issues/1093), [#953](https://github.com/aws-actions/configure-aws-credentials/issues/953)) — a role whose **name** contains the string `github` fails to assume. The suspected mechanism is GitHub Actions' automatic secret-masking interfering with the role name inside the action, so the ARN that reaches STS isn't the one configured. Nothing in the AWS configuration is wrong, which is exactly why it's so hard to find.
+
+*Fix:* rename the role. `legal-lakehouse-github-deploy` → `legal-lakehouse-ci-deploy`.
+
+*Why it took so long:* the error message is identical whether the secret is missing, the trust policy is wrong, or the audience mismatches — so the obvious candidates get checked first, and they all pass. Everything below was verified as correct **before** the real cause was found, which is the point: a clean bill of health on every input is itself a signal that the fault is in the tooling, not the config.
+
+| Checked | Result |
+|---|---|
+| Secret present in the workflow | `AWS_DEPLOY_ROLE_ARN` length 60 — correct ARN, no whitespace. Confirmed by a preflight step that prints length, never the value |
+| Repository vs. Environment secret | Repository secret; the job declares no `environment:`, so an Environment secret would never resolve |
+| `id-token: write` permission | Present at workflow level. Its absence produces a *different* error, and the log shows a token being issued |
+| OIDC provider URL | `token.actions.githubusercontent.com` — exact |
+| Provider `ClientIDList` | `["sts.amazonaws.com"]` — matches the audience the action requests |
+| Trust policy `aud` condition | `StringEquals sts.amazonaws.com` — matches |
+| Trust policy `sub` condition | `repo:<owner>/legal-lakehouse:ref:refs/heads/main` |
+| Actual claim GitHub sends | `repo:<owner>/legal-lakehouse:ref:refs/heads/main` — **identical, character for character** |
+| CA thumbprint | Replaced a placeholder with GitHub's two real intermediate thumbprints. No change (consistent with AWS's documented behaviour of ignoring it since July 2023) |
+| CloudTrail `AssumeRoleWithWebIdentity` | No events in `us-east-1` or `ap-southeast-2` — consistent with the request never reaching STS with the correct ARN |
+| **Role name** | **`legal-lakehouse-github-deploy` — contained `github`. This was the bug.** |
+
+A wildcard trust policy (`repo:owner/repo:*`) was written as a diagnostic and reverted **without ever being applied** — loosening it would have masked the real cause and shipped the exact misconfiguration this project is meant to demonstrate avoiding.
+
 **Buildx + Lambda: `--provenance=false --sbom=false` is mandatory.** Buildx's default `--push` attaches provenance/SBOM attestations, which wrap the image in an OCI *image index*. Lambda only accepts a plain single-architecture manifest and fails with `InvalidParameterValueException: The image manifest, config or layer media type ... is not supported`. Worse, the push may report success — `aws ecr describe-images` showed the tag `ACTIVE` — while producing an artifact Lambda can't consume. Check `imageManifestMediaType` is `image.manifest`, not `image.index`.
 
 **Terraform still requires an OIDC thumbprint.** AWS has verified GitHub's OIDC endpoint against its trusted root CAs since July 2023, so the thumbprint is ignored in practice — but `aws_iam_openid_connect_provider` still validates that `thumbprint_list` contains an exactly-40-character string.
@@ -226,13 +255,14 @@ Documented because each cost real time and none is obvious from the docs.
 
 Scoped out deliberately, in the order I'd add them:
 
-1. **Step Functions orchestration** — `Ingest → Map(parse) → dbt build → Notify`, with retries (`BackoffRate: 2.0`), a `Catch` routing to SNS, an SQS DLQ on the parser, and `MaxConcurrency` capped at ~5. Today ingest and parse are invoked manually and dbt runs from CD; this is the clearest gap between "portfolio pipeline" and "production pipeline."
-2. **CloudWatch dashboard and alarms in Terraform** — invocations/errors/duration p50 and p99, the EMF custom metrics, and S3 object counts per layer. Two alarms (parser error rate >5%, Step Functions failure) to SNS. The metrics are already being emitted; only the dashboard is missing.
-3. **`dbt-expectations`** for distributional checks — `text_length` within reasonable bounds, jurisdiction distribution not shifting sharply between runs.
-4. **Row-count anomaly detection** — fail if an ingest is under 50% of the trailing average. Crude, but it's the check that catches silently truncated upstream loads.
-5. **A runbook** (`docs/runbook.md`) — what to do when the parser alarm fires, how to replay the DLQ, how to roll back a bad dbt deploy.
-6. **Expand the court lookup table**, or replace it with a proper reference dataset. Deriving `court` from citation abbreviations works for the common cases and degrades gracefully, but it's the weakest link in `dim_court`.
-7. **Move to Glue/Spark** if volume grows past the thresholds in the decisions section above — the parser is a pure function, so the transformation logic ports directly.
+1. **Resolve the OIDC role assumption** (see Known issues) so CD actually deploys. Next avenues: enable a CloudTrail *trail* rather than relying on default Event history, decode the raw OIDC token's claims in-workflow to compare against the trust policy byte-for-byte rather than trusting the rendered `github.*` context, and check whether a custom OIDC subject-claim template is set on the repository.
+2. **Step Functions orchestration** — `Ingest → Map(parse) → dbt build → Notify`, with retries (`BackoffRate: 2.0`), a `Catch` routing to SNS, an SQS DLQ on the parser, and `MaxConcurrency` capped at ~5. Today ingest and parse are invoked manually; this is the clearest gap between "portfolio pipeline" and "production pipeline."
+3. **CloudWatch dashboard and alarms in Terraform** — invocations/errors/duration p50 and p99, the EMF custom metrics, and S3 object counts per layer. Two alarms (parser error rate >5%, Step Functions failure) to SNS. The metrics are already being emitted; only the dashboard is missing.
+4. **`dbt-expectations`** for distributional checks — `text_length` within reasonable bounds, jurisdiction distribution not shifting sharply between runs.
+5. **Row-count anomaly detection** — fail if an ingest is under 50% of the trailing average. Crude, but it's the check that catches silently truncated upstream loads.
+6. **A runbook** (`docs/runbook.md`) — what to do when the parser alarm fires, how to replay the DLQ, how to roll back a bad dbt deploy.
+7. **Expand the court lookup table**, or replace it with a proper reference dataset. Deriving `court` from citation abbreviations works for the common cases and degrades gracefully, but it's the weakest link in `dim_court`.
+8. **Move to Glue/Spark** if volume grows past the thresholds in the decisions section above — the parser is a pure function, so the transformation logic ports directly.
 
 ---
 

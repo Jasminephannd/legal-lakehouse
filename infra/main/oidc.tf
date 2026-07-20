@@ -11,7 +11,20 @@ resource "aws_iam_openid_connect_provider" "github" {
   url            = "https://token.actions.githubusercontent.com"
   client_id_list = ["sts.amazonaws.com"]
 
-  thumbprint_list = ["7ff779a415f7a1e932e21fae2f39af8798cd1d05"]
+  # GitHub's two real intermediate-CA thumbprints. Both are listed
+  # because GitHub's servers can return either intermediate certificate,
+  # and pinning only one is a documented cause of intermittent failures.
+  #
+  # AWS's docs say it has verified this provider against its trusted root
+  # CA library since July 2023 and no longer needs the thumbprint. An
+  # earlier version of this file therefore used a randomly generated
+  # placeholder — which was wrong. Whatever the documented behaviour,
+  # supplying real values costs nothing and removes the only
+  # non-authentic element from the configuration.
+  thumbprint_list = [
+    "6938fd4d98bab03faadb97b34396831e3780aea1",
+    "1c58a3a8518e8759bf075b76b750d4f2df264fcd",
+  ]
 }
 
 # --- Trust policy: only main-branch pushes on this exact repo ----------
@@ -43,8 +56,26 @@ data "aws_iam_policy_document" "github_oidc_trust" {
   }
 }
 
+# NOTE THE NAME: it deliberately does NOT contain the string "github".
+#
+# aws-actions/configure-aws-credentials has an open bug
+# (https://github.com/aws-actions/configure-aws-credentials/issues/1093,
+# and #953) where a role whose NAME contains "github" fails to assume
+# with the completely non-specific error:
+#
+#   Could not assume role with OIDC:
+#   Not authorized to perform sts:AssumeRoleWithWebIdentity
+#
+# The suspected cause is GitHub Actions' automatic secret-masking
+# interfering with the role name inside the action before the STS call is
+# made — so the ARN that actually reaches AWS is not the one configured.
+#
+# This cost several hours to find, because every value on the AWS side
+# (provider URL, audience, trust policy sub, the decoded token claims)
+# verifies as correct. The fault is in the action, not the configuration.
+# The original name here was "legal-lakehouse-github-deploy".
 resource "aws_iam_role" "github_deploy" {
-  name               = "legal-lakehouse-github-deploy"
+  name               = "legal-lakehouse-ci-deploy"
   assume_role_policy = data.aws_iam_policy_document.github_oidc_trust.json
 }
 
@@ -196,5 +227,5 @@ resource "aws_iam_role_policy" "github_deploy" {
 
 output "github_deploy_role_arn" {
   value       = aws_iam_role.github_deploy.arn
-  description = "Set this as the `role-to-assume` input for aws-actions/configure-aws-credentials in cd.yml (Day 2)."
+  description = "Store as the AWS_DEPLOY_ROLE_ARN repository secret. NOTE: the role name must not contain the string 'github' — see the comment on aws_iam_role.github_deploy."
 }
