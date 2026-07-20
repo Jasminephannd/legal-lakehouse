@@ -108,14 +108,25 @@ resource "aws_iam_role" "github_deploy" {
 
 # --- Deploy permissions --------------------------------------------------
 #
-# Scoped to this project's resources by name/ARN prefix wherever the
-# service supports it (S3, Lambda, IAM, CloudWatch Logs). Glue and ECR
-# don't offer resource-level ARNs for the catalog/repo-management actions
-# used here, so those two statements are action-scoped only.
+# THE LESSON THAT SHAPES THIS WHOLE POLICY:
 #
-# This covers Day 1 (S3, Glue, ECR, Lambda, IAM). Day 2 adds Step
-# Functions, SNS, SQS, and Athena permissions — extend this file then
-# rather than over-granting now.
+# A least-privilege policy for Terraform is NOT "the actions Terraform
+# performs". Before applying anything, Terraform REFRESHES — it reads the
+# complete current state of every managed resource, including tags,
+# bucket policies, lifecycle rules and encryption settings that were never
+# explicitly configured. So every resource needs its Get*/List*/Describe*
+# actions too, or `terraform plan` dies during refresh having changed
+# nothing.
+#
+# Writing this policy from intent ("it creates a bucket, so it needs
+# CreateBucket") produced six separate AccessDenied failures on the first
+# real CD run: ecr:ListTagsForResource, glue:GetTags,
+# logs:DescribeLogGroups, iam:GetOpenIDConnectProvider,
+# s3:GetBucketPolicy, and s3:DeleteObject on the state lock file.
+#
+# Scoped by ARN prefix wherever the service supports it. Where a statement
+# uses "*", there's a comment saying why — that constraint is real, not
+# laziness.
 data "aws_iam_policy_document" "deploy_permissions" {
   statement {
     sid    = "TerraformStateAccess"
@@ -123,6 +134,11 @@ data "aws_iam_policy_document" "deploy_permissions" {
     actions = [
       "s3:GetObject",
       "s3:PutObject",
+      # DeleteObject is required to RELEASE THE STATE LOCK. With
+      # use_lockfile, the lock is an S3 object (.tflock) that Terraform
+      # deletes on completion. Without this, every run leaves the state
+      # locked and the next one fails until someone force-unlocks by hand.
+      "s3:DeleteObject",
       "s3:ListBucket",
     ]
     resources = [
@@ -135,15 +151,37 @@ data "aws_iam_policy_document" "deploy_permissions" {
     sid    = "DataLakeBucket"
     effect = "Allow"
     actions = [
+      # Write/manage
       "s3:CreateBucket",
       "s3:PutBucketVersioning",
       "s3:PutBucketPolicy",
       "s3:PutBucketPublicAccessBlock",
       "s3:PutEncryptionConfiguration",
       "s3:PutLifecycleConfiguration",
-      "s3:GetObject",
+      "s3:PutBucketTagging",
       "s3:PutObject",
       "s3:DeleteObject",
+
+      # Read — needed by `terraform refresh`, not by anything this
+      # pipeline consciously does. GetBucketPolicy is required even though
+      # no bucket policy is ever set: Terraform reads it to confirm it's
+      # absent.
+      "s3:GetBucketPolicy",
+      "s3:GetBucketVersioning",
+      "s3:GetBucketPublicAccessBlock",
+      "s3:GetEncryptionConfiguration",
+      "s3:GetLifecycleConfiguration",
+      "s3:GetBucketTagging",
+      "s3:GetBucketLocation",
+      "s3:GetBucketAcl",
+      "s3:GetBucketCORS",
+      "s3:GetBucketWebsite",
+      "s3:GetBucketLogging",
+      "s3:GetBucketObjectLockConfiguration",
+      "s3:GetBucketRequestPayment",
+      "s3:GetReplicationConfiguration",
+      "s3:GetAccelerateConfiguration",
+      "s3:GetObject",
       "s3:ListBucket",
     ]
     resources = [
@@ -170,6 +208,12 @@ data "aws_iam_policy_document" "deploy_permissions" {
       "glue:GetPartition",
       "glue:GetPartitions",
       "glue:BatchGetPartition",
+      # Tag actions: the AWS provider reads tags on every Glue resource
+      # during refresh, and default_tags in versions.tf means it writes
+      # them too.
+      "glue:GetTags",
+      "glue:TagResource",
+      "glue:UntagResource",
     ]
     resources = ["*"] # Glue Data Catalog actions don't support resource-level ARNs here
   }
@@ -203,6 +247,13 @@ data "aws_iam_policy_document" "deploy_permissions" {
       "ecr:UploadLayerPart",
       "ecr:CompleteLayerUpload",
       "ecr:PutImage",
+
+      # Refresh-time reads.
+      "ecr:ListTagsForResource",
+      "ecr:TagResource",
+      "ecr:UntagResource",
+      "ecr:GetLifecyclePolicy",
+      "ecr:DescribeImages",
     ]
     resources = ["*"] # ecr:GetAuthorizationToken in particular only works against "*"
   }
@@ -239,10 +290,32 @@ data "aws_iam_policy_document" "deploy_permissions" {
       "iam:DetachRolePolicy",
       "iam:ListRolePolicies",
       "iam:ListAttachedRolePolicies",
+      "iam:ListRoleTags",
       "iam:TagRole",
+      "iam:UntagRole",
       "iam:PassRole",
     ]
     resources = ["arn:aws:iam::*:role/legal-lakehouse-*"]
+  }
+
+  # The OIDC provider is a separate ARN type from roles, so it needs its
+  # own statement. Terraform manages this resource, so it reads it on
+  # every refresh — including the run that is itself authenticating
+  # through it.
+  statement {
+    sid    = "IamOidcProvider"
+    effect = "Allow"
+    actions = [
+      "iam:GetOpenIDConnectProvider",
+      "iam:CreateOpenIDConnectProvider",
+      "iam:UpdateOpenIDConnectProviderThumbprint",
+      "iam:AddClientIDToOpenIDConnectProvider",
+      "iam:RemoveClientIDFromOpenIDConnectProvider",
+      "iam:TagOpenIDConnectProvider",
+      "iam:UntagOpenIDConnectProvider",
+      "iam:ListOpenIDConnectProviderTags",
+    ]
+    resources = ["arn:aws:iam::*:oidc-provider/token.actions.githubusercontent.com"]
   }
 
   statement {
@@ -252,10 +325,24 @@ data "aws_iam_policy_document" "deploy_permissions" {
       "logs:CreateLogGroup",
       "logs:DeleteLogGroup",
       "logs:PutRetentionPolicy",
-      "logs:DescribeLogGroups",
+      "logs:ListTagsForResource",
       "logs:TagResource",
+      "logs:UntagResource",
     ]
     resources = ["arn:aws:logs:ap-southeast-2:*:log-group:/aws/lambda/legal-lakehouse-*"]
+  }
+
+  # logs:DescribeLogGroups CANNOT be scoped to a specific log group.
+  # It's a list operation over the whole region, and AWS evaluates it
+  # against `arn:aws:logs:<region>:<account>:log-group::log-stream:` —
+  # note the empty log-group segment. Scoping it to
+  # "log-group:/aws/lambda/legal-lakehouse-*" therefore never matches, and
+  # produces an AccessDenied that names a resource ARN you didn't write.
+  statement {
+    sid       = "CloudWatchLogsDescribe"
+    effect    = "Allow"
+    actions   = ["logs:DescribeLogGroups"]
+    resources = ["*"]
   }
 }
 
