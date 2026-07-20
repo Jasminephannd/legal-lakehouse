@@ -183,11 +183,60 @@ data "aws_iam_policy_document" "deploy_permissions" {
       "s3:GetAccelerateConfiguration",
       "s3:GetObject",
       "s3:ListBucket",
+
+      # The bucket notification wires the S3 -> Lambda trigger.
+      "s3:GetBucketNotification",
+      "s3:PutBucketNotification",
+
+      # Object-level tag reads. default_tags in versions.tf applies tags
+      # to the aws_s3_object prefix markers, so refresh reads them back.
+      "s3:GetObjectTagging",
+      "s3:PutObjectTagging",
+      "s3:DeleteObjectTagging",
+      "s3:GetObjectVersion",
+      "s3:GetObjectVersionTagging",
+      "s3:GetObjectAcl",
     ]
     resources = [
       "arn:aws:s3:::legal-lakehouse-data*",
       "arn:aws:s3:::legal-lakehouse-data*/*",
     ]
+  }
+
+  # Athena. Two distinct needs in one statement:
+  #   1. Terraform manages the workgroup (Get/Create/Update/Delete + tags)
+  #   2. `dbt build --target prod` runs queries THROUGH that workgroup,
+  #      so the same role needs query-execution permissions.
+  # Adding both now rather than discovering (2) in a later failed run.
+  statement {
+    sid    = "Athena"
+    effect = "Allow"
+    actions = [
+      "athena:GetWorkGroup",
+      "athena:CreateWorkGroup",
+      "athena:UpdateWorkGroup",
+      "athena:DeleteWorkGroup",
+      "athena:ListWorkGroups",
+      "athena:TagResource",
+      "athena:UntagResource",
+      "athena:ListTagsForResource",
+
+      # Query execution — needed by dbt.
+      "athena:StartQueryExecution",
+      "athena:StopQueryExecution",
+      "athena:GetQueryExecution",
+      "athena:GetQueryResults",
+      "athena:GetQueryResultsStream",
+      "athena:ListQueryExecutions",
+      "athena:BatchGetQueryExecution",
+      "athena:GetDataCatalog",
+      "athena:ListDataCatalogs",
+      "athena:GetDatabase",
+      "athena:ListDatabases",
+      "athena:GetTableMetadata",
+      "athena:ListTableMetadata",
+    ]
+    resources = ["*"]
   }
 
   statement {
@@ -271,7 +320,21 @@ data "aws_iam_policy_document" "deploy_permissions" {
       "lambda:RemovePermission",
       "lambda:GetPolicy",
       "lambda:TagResource",
+      "lambda:UntagResource",
       "lambda:ListTags",
+
+      # Refresh-time reads. ListVersionsByFunction is required even
+      # though this project never publishes a version — the provider
+      # calls it to determine the function's latest version on every
+      # refresh.
+      "lambda:ListVersionsByFunction",
+      "lambda:GetFunctionConfiguration",
+      "lambda:GetFunctionCodeSigningConfig",
+      "lambda:GetFunctionConcurrency",
+      "lambda:GetFunctionEventInvokeConfig",
+      "lambda:ListFunctionEventInvokeConfigs",
+      "lambda:GetFunctionUrlConfig",
+      "lambda:GetRuntimeManagementConfig",
     ]
     resources = ["arn:aws:lambda:ap-southeast-2:*:function:legal-lakehouse-*"]
   }
