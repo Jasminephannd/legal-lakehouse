@@ -4,6 +4,16 @@ on:
   push:
     branches: [main]
 
+  # Manual trigger, primarily for the full-refresh escape hatch below.
+  workflow_dispatch:
+    inputs:
+      dbt_full_refresh:
+        description: >
+          Rebuild incremental models from scratch. Required after changing
+          the LOGIC of an incremental model — see the dbt step for why.
+        type: boolean
+        default: false
+
 # The block everyone forgets. Without id-token: write, the OIDC handshake
 # in configure-aws-credentials fails with an opaque credentials error.
 permissions:
@@ -176,11 +186,35 @@ jobs:
       - name: Install dbt
         run: pip install -r requirements.txt
 
+      # --full-refresh is the escape hatch for a specific failure mode that
+      # is easy to misdiagnose.
+      #
+      # fct_judgment is incremental on `ingested_at > max(ingested_at)`.
+      # That filter is about NEW DATA — it knows nothing about the model's
+      # SQL changing. So when a bug in the transformation logic is fixed,
+      # a normal run matches zero new rows, merges nothing, reports
+      # "OK 0" — and leaves every previously-written row exactly as wrong
+      # as it was. The build looks green at the model step and then fails
+      # at a downstream test, pointing at code that is already correct.
+      #
+      # This is the warehouse-layer version of the Day 1 silver rebuild:
+      # idempotency protects against re-running the SAME code. It does not
+      # help when the logic itself changes and the existing output needs
+      # to be recomputed.
+      #
+      # Rule of thumb: new data -> normal run. Changed model SQL ->
+      # full refresh, once, then back to normal.
       - name: dbt build (prod)
         working-directory: dbt
         env:
           DBT_PROFILES_DIR: ${{ github.workspace }}/dbt
           ATHENA_S3_STAGING_DIR: ${{ secrets.ATHENA_S3_STAGING_DIR }}
+          FULL_REFRESH: ${{ github.event.inputs.dbt_full_refresh }}
         run: |
           dbt deps
-          dbt build --target prod
+          if [ "$FULL_REFRESH" = "true" ]; then
+            echo "Running with --full-refresh: incremental models will be rebuilt from scratch."
+            dbt build --target prod --full-refresh
+          else
+            dbt build --target prod
+          fi

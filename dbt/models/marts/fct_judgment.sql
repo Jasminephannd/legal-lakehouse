@@ -39,6 +39,14 @@ with staged as (
 
     {% if is_incremental() %}
     -- Only reprocess rows the parser touched since the last build.
+    --
+    -- IMPORTANT: this filter is about new DATA. It knows nothing about
+    -- this model's SQL changing. After editing the transformation logic
+    -- below, a normal run matches zero new rows, merges nothing, logs
+    -- "OK 0", and leaves every existing row computed by the OLD logic —
+    -- so a downstream test fails while pointing at code that is already
+    -- correct. Changed logic requires one `--full-refresh` run
+    -- (workflow_dispatch input `dbt_full_refresh` in .github/workflows/cd.yml).
     where ingested_at > (select coalesce(max(ingested_at), from_unixtime(0)) from {{ this }})
     {% endif %}
 
