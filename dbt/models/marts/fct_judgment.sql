@@ -73,10 +73,24 @@ final as (
         -- strict rather than tolerating nulls.
         {{ dbt_utils.generate_surrogate_key(['s.jurisdiction_code']) }} as jurisdiction_key,
 
-        coalesce(
-            {{ dbt_utils.generate_surrogate_key(['s.court_name']) }},
-            {{ dbt_utils.generate_surrogate_key(["'__not_applicable__'"]) }}
-        ) as court_key,
+        -- COALESCE THE VALUE, NOT THE HASH.
+        --
+        -- dbt_utils.generate_surrogate_key does NOT return NULL when its
+        -- input is NULL — it substitutes an internal placeholder string
+        -- and hashes that. So the obvious-looking
+        --
+        --   coalesce(generate_surrogate_key(['s.court_name']),
+        --            generate_surrogate_key(["'__not_applicable__'"]))
+        --
+        -- never falls through: the first argument is always a hash, just
+        -- a hash of "null". Every non-decision document (legislation and
+        -- bills, which have no court) then carries a court_key that
+        -- matches no row in dim_court.
+        --
+        -- That silently broke 1,238 of 2,000 rows and was caught by the
+        -- relationships test on court_key — a join that looks correct,
+        -- produces plausible-looking keys, and is wrong.
+        {{ dbt_utils.generate_surrogate_key(["coalesce(s.court_name, '__not_applicable__')"]) }} as court_key,
 
         coalesce(
             d.date_key,
