@@ -24,7 +24,10 @@ legal_lakehouse:
       # Gold-layer tables are written under their own prefix, kept
       # separate from the silver Parquet the parser Lambda owns.
       s3_data_dir: "s3://legal-lakehouse-data-jasminephannd/gold/"
-      s3_data_naming: schema_table
+      # MUST be a *_unique scheme while any model is Iceberg. See the
+      # note on the prod target below — schema_table (no suffix) makes a
+      # full refresh delete the data it just wrote.
+      s3_data_naming: schema_table_unique
 
     prod:
       type: athena
@@ -35,4 +38,28 @@ legal_lakehouse:
       work_group: "{{ env_var('ATHENA_WORK_GROUP', 'legal-lakehouse') }}"
       threads: 4
       s3_data_dir: "s3://legal-lakehouse-data-jasminephannd/gold/"
-      s3_data_naming: schema_table
+      # s3_data_naming MUST include the _unique suffix, because
+      # fct_judgment is an Iceberg table.
+      #
+      # With plain `schema_table`, every build of a given model resolves
+      # to the SAME S3 prefix. That is harmless for Hive tables (DROP is
+      # a metadata-only operation there) but destructive for Iceberg,
+      # where DROP TABLE deletes the underlying data and metadata files.
+      #
+      # On a --full-refresh, dbt creates the new table and then drops the
+      # old relation. Sharing one prefix means that drop deletes the
+      # files it has just written. The build reports success — the model
+      # step really did write 2,000 rows — and then every read of the
+      # table fails with:
+      #
+      #   ICEBERG_MISSING_METADATA: Metadata not found in metadata
+      #   location for table legal_lakehouse_prod_gold.fct_judgment
+      #
+      # i.e. the Glue table survives, pointing at an S3 metadata file
+      # that no longer exists. The _unique suffix appends a UUID so each
+      # build writes to a fresh prefix and the drop can only ever affect
+      # the old one.
+      #
+      # This never surfaced before the first full refresh, because
+      # ordinary incremental runs never drop the relation.
+      s3_data_naming: schema_table_unique
