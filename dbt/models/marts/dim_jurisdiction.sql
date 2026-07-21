@@ -30,7 +30,15 @@ enriched as (
             when 'south_australia'   then 'South Australia'
             when 'tasmania'          then 'Tasmania'
             when 'norfolk_island'    then 'Norfolk Island'
-            else initcap(replace(jurisdiction_code, '_', ' '))
+            -- Fallback for a jurisdiction_code not in the list above.
+            -- Athena runs Trino, which has no initcap() (that's Postgres
+            -- and Snowflake) — so this just de-underscores the raw code
+            -- rather than title-casing it. Acceptable because all seven
+            -- real values are explicitly mapped above, and the
+            -- accepted_values test on jurisdiction_code fails loudly if a
+            -- new one ever appears. Cosmetic casing on a value that
+            -- should never occur isn't worth a regexp_replace lambda.
+            else replace(jurisdiction_code, '_', ' ')
         end as jurisdiction_name,
 
         -- Federal vs state/territory matters for court hierarchy: a
