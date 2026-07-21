@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import os
 
 import boto3
 
@@ -69,7 +70,11 @@ def batches_containing_partition(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Reprocess one silver partition from bronze.")
-    parser.add_argument("--bucket", default="legal-lakehouse-data-jasminephannd")
+    parser.add_argument(
+        "--bucket",
+        default=os.environ.get("DATA_BUCKET", "legal-lakehouse-data-jasminephannd"),
+        help="Data lake bucket. Defaults to $DATA_BUCKET when set.",
+    )
     parser.add_argument("--jurisdiction", required=True, help="e.g. new_south_wales")
     parser.add_argument("--year", required=True, help="4-digit year, or 'unknown'")
     parser.add_argument("--ingest-date", help="Restrict the bronze scan to one ingest date.")

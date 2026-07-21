@@ -23,7 +23,7 @@ legal_lakehouse:
       threads: 4
       # Gold-layer tables are written under their own prefix, kept
       # separate from the silver Parquet the parser Lambda owns.
-      s3_data_dir: "s3://legal-lakehouse-data-jasminephannd/gold/"
+      s3_data_dir: "s3://{{ env_var('DATA_BUCKET', 'legal-lakehouse-data-jasminephannd') }}/gold/"
       # MUST be a *_unique scheme while any model is Iceberg. See the
       # note on the prod target below — schema_table (no suffix) makes a
       # full refresh delete the data it just wrote.
@@ -37,7 +37,7 @@ legal_lakehouse:
       schema: "{{ env_var('ATHENA_DATABASE_PROD', 'legal_lakehouse_prod') }}"
       work_group: "{{ env_var('ATHENA_WORK_GROUP', 'legal-lakehouse') }}"
       threads: 4
-      s3_data_dir: "s3://legal-lakehouse-data-jasminephannd/gold/"
+      s3_data_dir: "s3://{{ env_var('DATA_BUCKET', 'legal-lakehouse-data-jasminephannd') }}/gold/"
       # s3_data_naming MUST include the _unique suffix, because
       # fct_judgment is an Iceberg table.
       #
